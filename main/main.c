@@ -1122,6 +1122,26 @@ static ZEND_COLD void php_error_cb(int type, const char *error_filename, const u
 			efree(log_buffer);
 		}
 
+		/* set status header if real error happened */
+		switch (type) {
+			case E_CORE_ERROR:
+			case E_ERROR:
+			case E_RECOVERABLE_ERROR:
+			case E_PARSE:
+			case E_COMPILE_ERROR:
+			case E_USER_ERROR:
+				if (module_initialized && !SG(headers_sent) &&
+				    SG(sapi_headers).http_response_code == 200
+				) {
+					sapi_header_line ctr = { 0, 0, 0 };
+
+					ctr.line = (char*) "HTTP/1.0 500 Internal Server Error";
+					ctr.line_len = sizeof("HTTP/1.0 500 Internal Server Error") - 1;
+					sapi_header_op(SAPI_HEADER_REPLACE, &ctr TSRMLS_CC);
+				}
+				break;
+		}
+
 		if (PG(display_errors) && ((module_initialized && !PG(during_request_startup)) || (PG(display_startup_errors)))) {
 			if (PG(xmlrpc_errors)) {
 				php_printf("<?xml version=\"1.0\"?><methodResponse><fault><value><struct><member><name>faultCode</name><value><int>%pd</int></value></member><member><name>faultString</name><value><string>%s:%s in %s on line %d</string></value></member></struct></value></fault></methodResponse>", PG(xmlrpc_error_number), error_type_str, buffer, error_filename, error_lineno);
@@ -1186,26 +1206,14 @@ static ZEND_COLD void php_error_cb(int type, const char *error_filename, const u
 		case E_COMPILE_ERROR:
 		case E_USER_ERROR:
 			EG(exit_status) = 255;
-			if (module_initialized) {
-				if (!PG(display_errors) &&
-				    !SG(headers_sent) &&
-					SG(sapi_headers).http_response_code == 200
-				) {
-					sapi_header_line ctr = {0};
-
-					ctr.line = "HTTP/1.0 500 Internal Server Error";
-					ctr.line_len = sizeof("HTTP/1.0 500 Internal Server Error") - 1;
-					sapi_header_op(SAPI_HEADER_REPLACE, &ctr);
-				}
-				/* the parser would return 1 (failure), we can bail out nicely */
-				if (type != E_PARSE) {
-					/* restore memory limit */
-					zend_set_memory_limit(PG(memory_limit));
-					efree(buffer);
-					zend_objects_store_mark_destructed(&EG(objects_store));
-					zend_bailout();
-					return;
-				}
+			/* the parser would return 1 (failure), we can bail out nicely */
+			if (module_initialized && type != E_PARSE) {
+				/* restore memory limit */
+				zend_set_memory_limit(PG(memory_limit));
+				efree(buffer);
+				zend_objects_store_mark_destructed(&EG(objects_store));
+				zend_bailout();
+				return;
 			}
 			break;
 	}
